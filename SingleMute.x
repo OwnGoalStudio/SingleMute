@@ -69,7 +69,7 @@ static SBRingerControl *_ringerControl = nil;
 static NSMutableSet<SMWeakContainer *> *_weakContainers = nil;
 
 // this is enough for the status bar legacy data
-static unsigned char _sharedData[5000] = {0};
+static unsigned char *_sharedData = NULL;
 
 %group SingleMuteQuietMode
 
@@ -177,6 +177,7 @@ static unsigned char _sharedData[5000] = {0};
     }
 
     _weakContainers = [NSMutableSet set];
+    _sharedData = (unsigned char *)calloc(32768, sizeof(unsigned char));
 
     %init(SingleMuteQuietMode);
     if (kUseLowPriorityLocation) {
