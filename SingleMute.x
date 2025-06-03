@@ -4,7 +4,18 @@
 
 @interface SBRingerControl : NSObject
 - (BOOL)isRingerMuted;
+- (BOOL)_accessibilityIsRingerMuted;
 @end
+
+static BOOL IsRingerMuted(SBRingerControl *ringerControl) {
+    if ([ringerControl respondsToSelector:@selector(isRingerMuted)]) {
+        return [ringerControl isRingerMuted];
+    }
+    if ([ringerControl respondsToSelector:@selector(_accessibilityIsRingerMuted)]) {
+        return [ringerControl _accessibilityIsRingerMuted];
+    }
+    return NO;
+}
 
 @interface _UIStatusBarDataQuietModeEntry : NSObject
 @property(nonatomic, copy) NSString *focusName;
@@ -65,7 +76,7 @@ static unsigned char _sharedData[5000] = {0};
 %hook _UIStatusBarIndicatorQuietModeItem
 
 - (id)systemImageNameForUpdate:(_UIStatusBarItemUpdate *)update {
-    BOOL isRingerMuted = [_ringerControl isRingerMuted];
+    BOOL isRingerMuted = IsRingerMuted(_ringerControl);
     BOOL isQuietModeEnabled = ![update.data.quietModeEntry.focusName isEqualToString:@"!Mute"];
     if (isRingerMuted && !isQuietModeEnabled) {
         return @"bell.slash.fill";
@@ -80,7 +91,7 @@ static unsigned char _sharedData[5000] = {0};
 - (id)initFromData:(unsigned char *)data type:(int)arg2 focusName:(const char *)arg3 maxFocusLength:(int)arg4 imageName:(const char*)arg5 maxImageLength:(int)arg6 boolValue:(BOOL)arg7 {
     BOOL isQuietMode = data[2];
     if (!isQuietMode) {
-        _sharedData[2] = [_ringerControl isRingerMuted];
+        _sharedData[2] = IsRingerMuted(_ringerControl);
         return %orig(_sharedData, arg2, "!Mute", arg4, arg5, arg6, arg7);
     }
     return %orig;
@@ -147,7 +158,7 @@ static unsigned char _sharedData[5000] = {0};
 %hook _UIStatusBarDataLocationEntry
 
 - (id)initFromData:(unsigned char *)arg1 type:(int)arg2 {
-    BOOL isRingerMuted = [_ringerControl isRingerMuted];
+    BOOL isRingerMuted = IsRingerMuted(_ringerControl);
     if (isRingerMuted) {
         _sharedData[21] = 0;
         return %orig(_sharedData, arg2);
