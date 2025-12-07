@@ -1,6 +1,10 @@
 @import UIKit;
 
-#import <HBLog.h>
+#if DEBUG
+    #define SMLog(...) NSLog(@"SingleMute : " __VA_ARGS__)
+#else
+    #define SMLog(...) do {} while (0)
+#endif
 
 @interface SBRingerControl : NSObject
 - (BOOL)isRingerMuted;
@@ -43,6 +47,26 @@ static BOOL IsRingerMuted(SBRingerControl *ringerControl) {
 @interface UIStatusBar_Modern : UIStatusBar_Base
 @end
 
+@interface STStatusBarDataLocationEntry : NSObject
+- (BOOL)isEnabled;
+@end
+
+@interface STStatusBarDataQuietModeEntry : NSObject
+- (BOOL)boolValue;
++ (STStatusBarDataQuietModeEntry *)entryWithFocusName:(NSString *)arg1 imageNamed:(NSString *)arg2 boolValue:(BOOL)arg3;
+@end
+
+@interface STStatusBarData : NSObject
+- (STStatusBarDataLocationEntry *)locationEntry;
+- (STStatusBarDataQuietModeEntry *)quietModeEntry;
+- (STStatusBarData *)dataByReplacingEntry:(id)arg1 forKey:(NSString *)arg2;
+- (STStatusBarData *)dataByRemovingEntriesForKeys:(NSArray<NSString *> *)a3;
+@end
+
+@interface STUIStatusBar : NSObject
+- (STStatusBarData *)currentData;
+@end
+
 @interface SMWeakContainer : NSObject
 @property(nonatomic, weak) id object;
 @end
@@ -65,56 +89,41 @@ static void ReloadPrefs() {
     kUseLowPriorityLocation = settings[@"LowerPriorityForLocationIcon"] ? [settings[@"LowerPriorityForLocationIcon"] boolValue] : NO;
 }
 
-static SBRingerControl *_ringerControl = nil;
+static SBRingerControl *_activeRinger = nil;
 static NSMutableSet<SMWeakContainer *> *_weakContainers = nil;
 
 // this is enough for the status bar legacy data
 static unsigned char *_sharedData = NULL;
 
-%group SingleMuteQuietMode
-
-%hook _UIStatusBarIndicatorQuietModeItem
-
-- (id)systemImageNameForUpdate:(_UIStatusBarItemUpdate *)update {
-    BOOL isRingerMuted = IsRingerMuted(_ringerControl);
-    BOOL isQuietModeEnabled = ![update.data.quietModeEntry.focusName isEqualToString:@"!Mute"];
-    if (isRingerMuted && !isQuietModeEnabled) {
-        return @"bell.slash.fill";
-    }
-    return %orig;
-}
-
-%end
-
-%hook _UIStatusBarDataQuietModeEntry
-
-- (id)initFromData:(unsigned char *)data type:(int)arg2 focusName:(const char *)arg3 maxFocusLength:(int)arg4 imageName:(const char*)arg5 maxImageLength:(int)arg6 boolValue:(BOOL)arg7 {
-    BOOL isQuietMode = data[2];
-    if (!isQuietMode) {
-        _sharedData[2] = IsRingerMuted(_ringerControl);
-        return %orig(_sharedData, arg2, "!Mute", arg4, arg5, arg6, arg7);
-    }
-    return %orig;
-}
-
-%end
+%group SingleMute
 
 %hook SBRingerControl
 
 // iOS 15
 - (id)initWithHUDController:(id)arg1 soundController:(id)arg2 {
-	_ringerControl = %orig;
-	return _ringerControl;
+	_activeRinger = %orig;
+    SMLog(@"Initialized active ringer: %@", _activeRinger);
+	return _activeRinger;
 }
 
 // iOS 16+
 - (id)initWithBannerManager:(id)arg1 soundController:(id)arg2 {
-	_ringerControl = %orig;
-	return _ringerControl;
+	_activeRinger = %orig;
+    SMLog(@"Initialized active ringer: %@", _activeRinger);
+	return _activeRinger;
+}
+
+- (void)completeSetupWithRingerMuted:(BOOL)a3 {
+    _activeRinger = self;
+    SMLog(@"Set active ringer to: %@", _activeRinger);
+    %orig;
 }
 
 - (void)setRingerMuted:(BOOL)arg1 {
+    _activeRinger = self;
+    SMLog(@"Set active ringer to: %@", _activeRinger);
     %orig;
+
     for (SMWeakContainer *container in _weakContainers) {
         UIStatusBar_Base *statusBar = (UIStatusBar_Base *)container.object;
         [statusBar reloadSingleMute];
@@ -123,10 +132,18 @@ static unsigned char *_sharedData = NULL;
 
 // iOS 17
 - (void)setRingerMuted:(BOOL)arg1 withFeedback:(BOOL)arg2 reason:(id)arg3 clientType:(unsigned)arg4 {
+    _activeRinger = self;
+    SMLog(@"Set active ringer to: %@", _activeRinger);
     %orig;
+
+    SMLog(@"Ringer muted changed to %@", arg1 ? @"YES" : @"NO");
     for (SMWeakContainer *container in _weakContainers) {
         UIStatusBar_Base *statusBar = (UIStatusBar_Base *)container.object;
+        if (!statusBar) {
+            continue;
+        }
         [statusBar reloadSingleMute];
+        SMLog(@"Reloaded status bar: %@", statusBar);
     }
 }
 
@@ -156,14 +173,14 @@ static unsigned char *_sharedData = NULL;
 
 %end
 
-%end // SingleMuteQuietMode
+%end // SingleMute
 
 %group SingleMuteLocation
 
 %hook _UIStatusBarDataLocationEntry
 
 - (id)initFromData:(unsigned char *)arg1 type:(int)arg2 {
-    BOOL isRingerMuted = IsRingerMuted(_ringerControl);
+    BOOL isRingerMuted = IsRingerMuted(_activeRinger);
     if (isRingerMuted) {
         _sharedData[21] = 0;
         return %orig(_sharedData, arg2);
@@ -175,6 +192,104 @@ static unsigned char *_sharedData = NULL;
 
 %end // SingleMuteLocation
 
+%group SingleMute16
+
+%hook _UIStatusBarIndicatorQuietModeItem
+
+- (id)systemImageNameForUpdate:(_UIStatusBarItemUpdate *)update {
+    BOOL isRingerMuted = IsRingerMuted(_activeRinger);
+    BOOL isQuietModeEnabled = ![update.data.quietModeEntry.focusName isEqualToString:@"!Mute"];
+    if (isRingerMuted && !isQuietModeEnabled) {
+        return @"bell.slash.fill";
+    }
+    return %orig;
+}
+
+%end
+
+%hook _UIStatusBarDataQuietModeEntry
+
+- (id)initFromData:(unsigned char *)data type:(int)arg2 focusName:(const char *)arg3 maxFocusLength:(int)arg4 imageName:(const char*)arg5 maxImageLength:(int)arg6 boolValue:(BOOL)arg7 {
+    BOOL isQuietMode = data[2];
+    if (!isQuietMode) {
+        _sharedData[2] = IsRingerMuted(_activeRinger);
+        return %orig(_sharedData, arg2, "!Mute", arg4, arg5, arg6, arg7);
+    }
+    return %orig;
+}
+
+%end
+
+%end // SingleMute16
+
+%group SingleMute17
+
+%hook STUIStatusBar
+
+- (void)_updateWithAggregatedData:(STStatusBarData *)data {
+    BOOL isRingerMuted = IsRingerMuted(_activeRinger);
+
+    STStatusBarData *currentData = [self currentData];
+    BOOL isQuietModeEnabled = [data.quietModeEntry boolValue] || [currentData.quietModeEntry boolValue];
+    BOOL didPopulateMuteEntry = NO;
+
+    if (isRingerMuted && !isQuietModeEnabled) {
+        static STStatusBarDataQuietModeEntry *mutedEntry = nil;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            mutedEntry = [%c(STStatusBarDataQuietModeEntry) entryWithFocusName:@"!Mute" imageNamed:@"bell.slash.fill" boolValue:YES];
+        });
+        if (mutedEntry) {
+            data = [data dataByReplacingEntry:mutedEntry forKey:@"quietModeEntry"];
+            didPopulateMuteEntry = YES;
+        }
+    }
+
+    if (didPopulateMuteEntry) {
+        BOOL isLocationEnabled = [data.locationEntry isEnabled] || [currentData.locationEntry isEnabled];
+        if (isLocationEnabled && kUseLowPriorityLocation) {
+            data = [data dataByRemovingEntriesForKeys:@[@"locationEntry"]];
+        }
+    }
+
+    %orig(data);
+    SMLog(@"Updated status bar with data: %@", data);
+}
+
+- (void)_updateWithData:(STStatusBarData *)data completionHandler:(id)a4 {
+    BOOL isRingerMuted = IsRingerMuted(_activeRinger);
+
+    STStatusBarData *currentData = [self currentData];
+    BOOL isQuietModeEnabled = [data.quietModeEntry boolValue] || [currentData.quietModeEntry boolValue];
+    BOOL didPopulateMuteEntry = NO;
+
+    if (isRingerMuted && !isQuietModeEnabled) {
+        static STStatusBarDataQuietModeEntry *mutedEntry = nil;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            mutedEntry = [%c(STStatusBarDataQuietModeEntry) entryWithFocusName:@"!Mute" imageNamed:@"bell.slash.fill" boolValue:YES];
+        });
+        if (mutedEntry) {
+            data = [data dataByReplacingEntry:mutedEntry forKey:@"quietModeEntry"];
+            didPopulateMuteEntry = YES;
+        }
+    }
+
+    if (didPopulateMuteEntry) {
+        BOOL isLocationEnabled = [data.locationEntry isEnabled] || [currentData.locationEntry isEnabled];
+        if (isLocationEnabled && kUseLowPriorityLocation) {
+            data = [data dataByRemovingEntriesForKeys:@[@"locationEntry"]];
+        }
+    }
+
+    %orig(data, a4);
+    SMLog(@"Updated status bar with data: %@", data);
+}
+
+%end
+
+%end
+
 %ctor {
     ReloadPrefs();
     if (!kIsEnabled) {
@@ -184,8 +299,13 @@ static unsigned char *_sharedData = NULL;
     _weakContainers = [NSMutableSet set];
     _sharedData = (unsigned char *)calloc(32768, sizeof(unsigned char));
 
-    %init(SingleMuteQuietMode);
-    if (kUseLowPriorityLocation) {
-        %init(SingleMuteLocation);
+    %init(SingleMute);
+    if (@available(iOS 17, *)) {
+        %init(SingleMute17);
+    } else {
+        %init(SingleMute16);
+        if (kUseLowPriorityLocation) {
+            %init(SingleMuteLocation);
+        }
     }
 }
