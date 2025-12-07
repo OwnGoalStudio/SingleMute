@@ -143,9 +143,14 @@ static unsigned char *_sharedData = NULL;
 
 %new
 - (void)reloadSingleMute {
+    __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!weakSelf) {
+            return;
+        }
+        UIStatusBarServer *strongServer = weakSelf.statusBarServer;
         const unsigned char *data = [UIStatusBarServer getStatusBarData];
-        [self statusBarServer:self.statusBarServer didReceiveStatusBarData:data withActions:0];
+        [weakSelf statusBarServer:strongServer didReceiveStatusBarData:data withActions:0];
     });
 }
 
